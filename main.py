@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import re
 import warnings
+import inspect
 from typing import List, Optional
 from bs4 import BeautifulSoup
 from duckduckgo_search import DDGS 
@@ -87,7 +88,7 @@ def rename_file(old_path: str, new_path: str) -> str:
 
 @tool
 def delete_file(path: str) -> str:
-    """Delete a local file or directory."""
+    """Delete a local file or directory. This tool is risky and requires explicit user confirmation."""
     return sys_tools.delete_file(path, approved=True)
 
 @tool
@@ -97,7 +98,7 @@ def search_in_files(directory: str, query: str) -> str:
 
 @tool
 def run_bash(command: str) -> str:
-    """Execute a bash command on the host machine. Returns standard output."""
+    """Execute a bash command on the host machine. Risky commands require explicit user confirmation."""
     return sys_tools.run_bash(command, approved=True)
 
 @tool
@@ -264,6 +265,10 @@ async def main():
             
         conversation.append(HumanMessage(content=user_input))
         
+        # Tracking for batch approval in a single turn response
+        batch_approve = False
+        batch_reject = False
+        
         while True:
             try:
                  # Process state
@@ -283,13 +288,48 @@ async def main():
             for tool_call in ai_msg.tool_calls:
                  t_name = tool_call.get("name")
                  t_args = tool_call.get("args", {})
+                 
+                 # === INTERACTIVE PROTECTION LAYER ===
+                 is_risky = False
+                 risky_msg = ""
+                 
+                 if t_name == "delete_file":
+                     is_risky = True
+                     risky_msg = f"delete '{t_args.get('path')}'"
+                 elif t_name == "run_bash":
+                     cmd = t_args.get('command', '')
+                     if not sys_tools._is_command_safe(cmd):
+                         is_risky = True
+                         risky_msg = f"run risky command: '{cmd}'"
+                 
+                 if is_risky:
+                     if batch_reject:
+                         conversation.append(ToolMessage(content="Action rejected by user.", tool_call_id=tool_call["id"], name=t_name))
+                         continue
+                         
+                     if not batch_approve:
+                         prompt = f"\n{Colors.FAIL}{Colors.BOLD}[PROTECTION]{Colors.RESET} Allow Agent to {risky_msg}? (y/n/all/stop): "
+                         u_choice = input(prompt).strip().lower()
+                         
+                         if u_choice == 'all':
+                             batch_approve = True
+                         elif u_choice == 'stop':
+                             batch_reject = True
+                             print(f"  {Colors.FAIL}[Aborted]{Colors.RESET} Blocked all remaining.")
+                             conversation.append(ToolMessage(content="Action rejected by user.", tool_call_id=tool_call["id"], name=t_name))
+                             continue
+                         elif u_choice != 'y':
+                             print(f"  {Colors.FAIL}[Aborted]{Colors.RESET} Blocked action.")
+                             conversation.append(ToolMessage(content="Action rejected by user.", tool_call_id=tool_call["id"], name=t_name))
+                             continue
+
                  print(f"  {Colors.ACTION}[Executing] {t_name}({t_args}){Colors.RESET}")
                  
                  tool_target = next((t for t in master_toolset if getattr(t, 'name', None) == t_name), None)
                  if tool_target:
                      try:
-                         # Securely await asynchronous tool payloads to prevent coroutine thread blocks
-                         if asyncio.iscoroutinefunction(getattr(tool_target, "func", None)) or asyncio.iscoroutinefunction(tool_target.invoke):
+                         # Securely await asynchronous tool payloads
+                         if inspect.iscoroutinefunction(getattr(tool_target, "func", None)) or inspect.iscoroutinefunction(tool_target.invoke):
                              tool_res = await tool_target.ainvoke(t_args)
                          else:
                              tool_res = tool_target.invoke(t_args)
