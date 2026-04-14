@@ -1,0 +1,10 @@
+requests
+ollama
+langchain
+langchain-community
+duckduckgo-search
+crawl4ai
+beautifulsoup4
+lxml
+pydantic
+langchain-ollama
