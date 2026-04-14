@@ -24,6 +24,8 @@ class Colors:
     ASSISTANT = "\u001b[96m"    # Cyan
     ACTION = "\u001b[95m"       # Magenta
     FAIL = "\u001b[91m"         # Red
+    BOLD = "\u001b[1m"
+    OKCYAN = "\u001b[96m"
     RESET = "\u001b[0m"
 
 # ==========================================
@@ -237,10 +239,27 @@ async def main():
     
     while True:
         try:
-            user_input = input(f"\n{Colors.YOU}You:{Colors.RESET} ")
-            if user_input.strip().lower() in ['exit', 'quit']:
+            user_input = input(f"\n{Colors.YOU}You:{Colors.RESET} ").strip()
+            if not user_input:
+                continue
+                
+            if user_input.lower() in ['exit', 'quit']:
+                print(f"\n{Colors.ACTION}Terminating session. Goodbye.{Colors.RESET}")
                 break
+                
+            if user_input.lower() in ['help', '?', '/help']:
+                print(f"\n{Colors.ACTION}=== ANTIGRAVITY HELP SYSTEM ==={Colors.RESET}")
+                print(f"{Colors.BOLD}Commands:{Colors.RESET}")
+                print(f"  exit, quit  - Terminate the program")
+                print(f"  help, ?     - Show this help message")
+                print(f"\n{Colors.BOLD}Available Autonomous Tools:{Colors.RESET}")
+                for t in master_toolset:
+                    desc = getattr(t, 'description', 'No description available.')
+                    print(f"  {Colors.OKCYAN}{t.name:25}{Colors.RESET} : {desc}")
+                continue
+                
         except (KeyboardInterrupt, EOFError):
+            print(f"\n{Colors.ACTION}Session interrupted. Exiting.{Colors.RESET}")
             break
             
         conversation.append(HumanMessage(content=user_input))
