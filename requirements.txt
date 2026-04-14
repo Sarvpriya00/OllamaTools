@@ -8,3 +8,5 @@ beautifulsoup4
 lxml
 pydantic
 langchain-ollama
+fastapi
+uvicorn

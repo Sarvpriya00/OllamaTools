@@ -211,146 +211,126 @@ master_toolset = [
 ]
 
 # ==========================================
-# 3. Recursive Conversational Agent Loop
+# 3. AgentSession (Stateful Controller)
 # ==========================================
 
-async def main():
-    global core_engine
-    
-    parser = argparse.ArgumentParser(description="Antigravity Conversational AI Matrix")
-    parser.add_argument("--model", type=str, default="gemma4:latest", help="Local Ollama target configuration")
-    args = parser.parse_args()
-    
-    print(f"\n{Colors.ACTION}=== SYSTEM ONLINE: AUTONOMOUS AGENT ({args.model}) ==={Colors.RESET}")
-    
-    # Initialize connection parameter bindings
-    core_engine = ChatOllama(model=args.model, base_url="http://localhost:11434", temperature=0, num_ctx=128000)
-    agent_engine = core_engine.bind_tools(master_toolset)
-    
-    base_system = SystemMessage(
-        content="You are an autonomous AI coding assistant and research agent.\n"
-        "You possess a dynamic tool registry that allows you to directly manipulate the file system (read_file, write_file, edit_file, run_bash), as well as perform web investigations.\n"
-        "If a user asks you to write code or correct bugs, execute the necessary tools to navigate files and explicitly fix them independently.\n"
-        "If a user asks for 'deep research' into a complex topic, you have a master tool `perform_deep_research`. Triggering it will silently perform complex scraping logic and pipe the summary text strictly into your context window. You can then save those findings via write_file or discuss them.\n"
-        "Ensure all final responses respect the Apple Style Guide standard: direct, clear, free of fluff, and aggressively capability-oriented.\n"
-        "If the user wants multiple files created, trigger multiple `write_file` sequences independently."
-    )
-    
-    conversation = [base_system]
-    
-    while True:
-        try:
-            user_input = input(f"\n{Colors.YOU}You:{Colors.RESET} ").strip()
-            if not user_input:
-                continue
-                
-            if user_input.lower() in ['exit', 'quit']:
-                print(f"\n{Colors.ACTION}Terminating session. Goodbye.{Colors.RESET}")
-                break
-                
-            if user_input.lower() in ['help', '?', '/help']:
-                print(f"\n{Colors.ACTION}=== ANTIGRAVITY HELP SYSTEM ==={Colors.RESET}")
-                print(f"{Colors.BOLD}Commands:{Colors.RESET}")
-                print(f"  exit, quit  - Terminate the program")
-                print(f"  help, ?     - Show this help message")
-                print(f"\n{Colors.BOLD}Available Autonomous Tools:{Colors.RESET}")
-                for t in master_toolset:
-                    desc = getattr(t, 'description', 'No description available.')
-                    print(f"  {Colors.OKCYAN}{t.name:25}{Colors.RESET} : {desc}")
-                continue
-                
-        except (KeyboardInterrupt, EOFError):
-            print(f"\n{Colors.ACTION}Session interrupted. Exiting.{Colors.RESET}")
-            break
-            
-        conversation.append(HumanMessage(content=user_input))
+class AgentSession:
+    def __init__(self, model: str):
+        self.model = model
+        self.core_engine = ChatOllama(model=model, base_url="http://localhost:11434", temperature=0, num_ctx=128000)
+        self.agent_engine = self.core_engine.bind_tools(master_toolset)
+        self.conversation = [
+            SystemMessage(content=(
+                "You are an autonomous AI coding assistant and research agent.\n"
+                "You possess a dynamic tool registry that allows you to directly manipulate the file system (read_file, write_file, edit_file, run_bash), as well as perform web investigations.\n"
+                "If a user asks you to write code or correct bugs, execute the necessary tools to navigate files and explicitly fix them independently.\n"
+                "If a user asks for 'deep research' into a complex topic, you have a master tool `perform_deep_research`. Triggering it will silently perform complex scraping logic and pipe the summary text strictly into your context window. You can then save those findings via write_file or discuss them.\n"
+                "Ensure all final responses respect the Apple Style Guide standard: direct, clear, free of fluff, and aggressively capability-oriented.\n"
+                "If the user wants multiple files created, trigger multiple `write_file` sequences independently."
+            ))
+        ]
+
+    async def run_turn(self, user_input: str, on_tool_call=None):
+        """Processes one turn of the conversation, handling recursive tool calls."""
+        self.conversation.append(HumanMessage(content=user_input))
         
-        # Tracking for batch approval in a single turn response
+        # Turn-level batch approval tracking
         batch_approve = False
         batch_reject = False
         
         while True:
             try:
-                 # Process state
-                 ai_msg = agent_engine.invoke(conversation)
+                ai_msg = self.agent_engine.invoke(self.conversation)
             except Exception as e:
-                 print(f"{Colors.FAIL}Critical Engine Fault: {e}{Colors.RESET}")
-                 break
-                 
-            conversation.append(ai_msg)
+                print(f"{Colors.FAIL}Engine Fault: {e}{Colors.RESET}")
+                return f"System Error: {e}"
+                
+            self.conversation.append(ai_msg)
             
-            # If the engine issues raw conversational text instead of a tool call constraint, print and halt inner loop
             if not getattr(ai_msg, "tool_calls", None):
-                 print(f"{Colors.ASSISTANT}Assistant:{Colors.RESET} {ai_msg.content}")
-                 break
-                 
-            # Extract and execute bound tools explicitly
+                return ai_msg.content
+                
             for tool_call in ai_msg.tool_calls:
-                 t_name = tool_call.get("name")
-                 t_args = tool_call.get("args", {})
-                 
-                 # === INTERACTIVE PROTECTION LAYER ===
-                 is_risky = False
-                 risky_msg = ""
-                 
-                 if t_name == "delete_file":
-                     is_risky = True
-                     risky_msg = f"delete '{t_args.get('path')}'"
-                 elif t_name == "run_bash":
-                     cmd = t_args.get('command', '')
-                     if not sys_tools._is_command_safe(cmd):
-                         is_risky = True
-                         risky_msg = f"run risky command: '{cmd}'"
-                 
-                 if is_risky:
-                     if batch_reject:
-                         conversation.append(ToolMessage(content="Action rejected by user.", tool_call_id=tool_call["id"], name=t_name))
-                         continue
-                         
-                     if not batch_approve:
-                         prompt = f"\n{Colors.FAIL}{Colors.BOLD}[PROTECTION]{Colors.RESET} Allow Agent to {risky_msg}? (y/n/all/stop): "
-                         u_choice = input(prompt).strip().lower()
-                         
-                         if u_choice == 'all':
-                             batch_approve = True
-                         elif u_choice == 'stop':
-                             batch_reject = True
-                             print(f"  {Colors.FAIL}[Aborted]{Colors.RESET} Blocked all remaining.")
-                             conversation.append(ToolMessage(content="Action rejected by user.", tool_call_id=tool_call["id"], name=t_name))
-                             continue
-                         elif u_choice != 'y':
-                             print(f"  {Colors.FAIL}[Aborted]{Colors.RESET} Blocked action.")
-                             conversation.append(ToolMessage(content="Action rejected by user.", tool_call_id=tool_call["id"], name=t_name))
-                             continue
+                t_name = tool_call.get("name")
+                t_args = tool_call.get("args", {})
+                
+                # Protection Layer
+                is_risky = False
+                risky_msg = ""
+                if t_name == "delete_file":
+                    is_risky = True
+                    risky_msg = f"delete '{t_args.get('path')}'"
+                elif t_name == "run_bash":
+                    cmd = t_args.get('command', '')
+                    if not sys_tools._is_command_safe(cmd):
+                        is_risky = True
+                        risky_msg = f"run risky command: '{cmd}'"
+                
+                if is_risky:
+                    if batch_reject:
+                        self.conversation.append(ToolMessage(content="Action rejected by user.", tool_call_id=tool_call["id"], name=t_name))
+                        continue
+                        
+                    if not batch_approve:
+                        if on_tool_call:
+                            u_choice = await on_tool_call(risky_msg)
+                            if u_choice == 'all': batch_approve = True
+                            elif u_choice == 'stop':
+                                batch_reject = True
+                                self.conversation.append(ToolMessage(content="Action rejected by user.", tool_call_id=tool_call["id"], name=t_name))
+                                continue
+                            elif u_choice != 'y':
+                                self.conversation.append(ToolMessage(content="Action rejected by user.", tool_call_id=tool_call["id"], name=t_name))
+                                continue
+                        else:
+                            # If no callback (e.g. headless API), we must reject for safety unless otherwise specified
+                            self.conversation.append(ToolMessage(content="Action rejected: Human-in-the-loop confirmation required.", tool_call_id=tool_call["id"], name=t_name))
+                            continue
 
-                 print(f"  {Colors.ACTION}[Executing] {t_name}({t_args}){Colors.RESET}")
-                 
-                 tool_target = next((t for t in master_toolset if getattr(t, 'name', None) == t_name), None)
-                 if tool_target:
-                     try:
-                         # Securely await asynchronous tool payloads
-                         if inspect.iscoroutinefunction(getattr(tool_target, "func", None)) or inspect.iscoroutinefunction(tool_target.invoke):
-                             tool_res = await tool_target.ainvoke(t_args)
-                         else:
-                             tool_res = tool_target.invoke(t_args)
-                             
-                         conversation.append(ToolMessage(
-                             content=str(tool_res),
-                             tool_call_id=tool_call["id"],
-                             name=t_name
-                         ))
-                     except Exception as exc:
-                         conversation.append(ToolMessage(
-                             content=f"Execution Failed: {exc}",
-                             tool_call_id=tool_call["id"],
-                             name=t_name
-                         ))
-                 else:
-                     conversation.append(ToolMessage(
-                         content="Framework Error: Unregistered tool signature.",
-                         tool_call_id=tool_call["id"],
-                         name=t_name
-                     ))
+                print(f"  {Colors.ACTION}[Executing] {t_name}({t_args}){Colors.RESET}")
+                tool_target = next((t for t in master_toolset if getattr(t, 'name', None) == t_name), None)
+                
+                if tool_target:
+                    try:
+                        if inspect.iscoroutinefunction(getattr(tool_target, "func", None)) or inspect.iscoroutinefunction(tool_target.invoke):
+                            tool_res = await tool_target.ainvoke(t_args)
+                        else:
+                            tool_res = tool_target.invoke(t_args)
+                            
+                        self.conversation.append(ToolMessage(content=str(tool_res), tool_call_id=tool_call["id"], name=t_name))
+                    except Exception as exc:
+                        self.conversation.append(ToolMessage(content=f"Error: {exc}", tool_call_id=tool_call["id"], name=t_name))
+                else:
+                    self.conversation.append(ToolMessage(content="Error: Unregistered tool.", tool_call_id=tool_call["id"], name=t_name))
+
+# CLI Confirmation Helper
+async def cli_confirm(risky_msg: str):
+    prompt = f"\n{Colors.FAIL}{Colors.BOLD}[PROTECTION]{Colors.RESET} Allow Agent to {risky_msg}? (y/n/all/stop): "
+    return input(prompt).strip().lower()
+
+async def main():
+    parser = argparse.ArgumentParser(description="Antigravity Conversational AI Matrix")
+    parser.add_argument("--model", type=str, default="gemma4:latest", help="Local Ollama target configuration")
+    args = parser.parse_args()
+    
+    print(f"\n{Colors.ACTION}=== SYSTEM ONLINE: AUTONOMOUS AGENT ({args.model}) ==={Colors.RESET}")
+    session = AgentSession(model=args.model)
+    
+    while True:
+        try:
+            user_input = input(f"\n{Colors.YOU}You:{Colors.RESET} ").strip()
+            if not user_input: continue
+            if user_input.lower() in ['exit', 'quit']: break
+            if user_input.lower() in ['help', '?', '/help']:
+                print(f"\n{Colors.ACTION}=== HELP ==={Colors.RESET}")
+                for t in master_toolset: print(f"  {t.name:25} : {t.description}")
+                continue
+                
+            response = await session.run_turn(user_input, on_tool_call=cli_confirm)
+            print(f"{Colors.ASSISTANT}Assistant:{Colors.RESET} {response}")
+            
+        except (KeyboardInterrupt, EOFError):
+            break
 
 if __name__ == "__main__":
     asyncio.run(main())
