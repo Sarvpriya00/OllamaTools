@@ -2,7 +2,8 @@ import SwiftUI
 
 struct ResearchResponse: Codable {
     let status: String
-    let message: String
+    let response: String
+    let session_id: String
 }
 
 struct ContentView: View {
@@ -134,16 +135,16 @@ struct ContentView: View {
     
     # Networking Call to api.py
     func triggerResearch() {
-        guard let url = URL(string: "http://localhost:8000/research") else { return }
+        guard let url = URL(string: "http://localhost:8000/chat") else { return }
         
-        isExecuting = True
+        isExecuting = true
         statusMessage = "[Initiating] Objective sent to Python Bridge..."
         
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
         
-        let body: [String: String] = ["objective": objective, "model": selectedModel]
+        let body: [String: String] = ["message": objective, "model": selectedModel]
         request.httpBody = try? JSONEncoder().encode(body)
         
         Task {
@@ -151,18 +152,18 @@ struct ContentView: View {
                 let (data, _) = try await URLSession.shared.data(for: request)
                 if let decoded = try? JSONDecoder().decode(ResearchResponse.self, from: data) {
                     DispatchQueue.main.async {
-                        self.statusMessage = decoded.message
-                        # Automatically refresh files after a delay (since background task takes time)
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
+                        self.statusMessage = decoded.response
+                        # Automatically refresh files
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                             self.refreshFiles()
-                            self.isExecuting = False
+                            self.isExecuting = false
                         }
                     }
                 }
             } catch {
                 DispatchQueue.main.async {
                     self.statusMessage = "Network Error: Ensure api.py is running on port 8000."
-                    self.isExecuting = False
+                    self.isExecuting = false
                 }
             }
         }
