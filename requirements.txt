@@ -2,11 +2,12 @@ requests
 ollama
 langchain
 langchain-community
-duckduckgo-search
+langchain-ollama
+ddgs
 crawl4ai
 beautifulsoup4
 lxml
 pydantic
-langchain-ollama
 fastapi
 uvicorn
+yt-dlp

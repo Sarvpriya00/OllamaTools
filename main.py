@@ -5,20 +5,27 @@ import warnings
 import inspect
 from typing import List, Optional
 from bs4 import BeautifulSoup
-from duckduckgo_search import DDGS 
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig
 
-# Muffle all verbose system warnings natively to preserve terminal UI UX
+# Use updated ddgs library (replaces deprecated duckduckgo_search)
+try:
+    from ddgs import DDGS
+except ImportError:
+    from duckduckgo_search import DDGS
+
+# Muffle verbose system warnings to preserve terminal UI UX
 warnings.simplefilter("ignore", ResourceWarning)
-warnings.filterwarnings("ignore", category=RuntimeWarning, module="duckduckgo_search")
+warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 from langchain_ollama import ChatOllama
 from langchain_core.prompts import PromptTemplate
 from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 
-# Import the existing tool registry bridges safely exposing raw python components
+# Legacy tool registry (Category 0 — original tools)
 import tools as sys_tools
+# Expanded composable tool registry (Categories 1-5)
+import tools_v2 as v2
 
 class Colors:
     YOU = "\u001b[94m"          # Blue
@@ -112,19 +119,140 @@ def standard_web_search(query: str, max_results: int = 3) -> str:
     urls = []
     try:
         with DDGS() as ddgs:
-            for backend in ["api", "lite", "html"]:
-                try:
-                    results = ddgs.text(query, max_results=max_results, backend=backend)
-                    if results:
-                        for r in results:
-                            if isinstance(r, dict) and r.get('href'):
-                                urls.append(f"Title: {r.get('title')}\nURL: {r.get('href')}\nDesc: {r.get('body')}")
-                        if urls: break
-                except Exception:
-                    pass
-        return "\n\n".join(urls)
+            results = ddgs.text(query, max_results=max_results)
+            if results:
+                for r in results:
+                    if isinstance(r, dict) and r.get('href'):
+                        urls.append(f"Title: {r.get('title')}\nURL: {r.get('href')}\nDesc: {r.get('body')}")
+        return "\n\n".join(urls) if urls else "No results found."
     except Exception as e:
         return f"Web search error: {e}"
+
+
+# ==========================================
+# NEW TOOLS — Wrapped from tools_v2.py
+# ==========================================
+
+@tool
+def read_file(path: str) -> str:
+    """Read the complete contents of a local file into the agent's context."""
+    return v2.read_file(path)
+
+@tool
+def write_file(path: str, content: str) -> str:
+    """Create a new file or overwrite an existing file with string content. Automatically creates parent directories."""
+    return v2.write_file(path, content)
+
+@tool
+def list_files(directory: str = ".") -> str:
+    """List all files and subdirectories inside a directory for project navigation."""
+    return v2.list_files(directory)
+
+@tool
+def python_tool(code: str) -> str:
+    """
+    Execute a safe Python snippet in a sandboxed environment.
+    Use for: math calculations, data analysis, JSON transforms, CSV parsing.
+    No imports, no file I/O, no system access allowed — pure logic only.
+    """
+    return v2.python_tool(code)
+
+@tool
+def bash_tool(command: str) -> str:
+    """
+    Execute a shell command from a strict allowlist.
+    Allowed: yt-dlp, ffmpeg, ffprobe, curl, echo, ls, cat, grep, wc, head, tail, find, du, date, pwd, which, python3, pip.
+    All other commands are blocked for safety.
+    """
+    return v2.bash_tool(command)
+
+@tool
+def web_search(query: str, max_results: int = 5) -> str:
+    """
+    Search the web via DuckDuckGo and return ranked results with titles, URLs, and snippets.
+    Use for: trends, news, research, competitor analysis.
+    """
+    return v2.web_search(query, max_results)
+
+@tool
+def youtube_channel_scan(channel_url: str, max_videos: int = 10) -> str:
+    """
+    Scan a YouTube channel and extract video metadata: titles, views, upload dates, durations.
+    Use for: creator analysis, content strategy, trend spotting.
+    Requires yt-dlp to be installed.
+    """
+    return v2.youtube_channel_scan(channel_url, max_videos)
+
+@tool
+def yt_dlp_tool(url: str, action: str = "metadata", output_dir: str = "./cache") -> str:
+    """
+    Download or extract data from a YouTube video using yt-dlp.
+    action options:
+      'metadata'  → Returns full JSON metadata (title, description, tags, etc.)
+      'subtitles' → Downloads auto-generated subtitles as .vtt file
+      'thumbnail' → Downloads the best quality thumbnail image
+      'audio'     → Downloads best audio as .mp3
+    output_dir: local directory to save files (created automatically if missing).
+    """
+    return v2.yt_dlp_tool(url, action, output_dir)
+
+@tool
+def cache_read(key: str) -> str:
+    """
+    Load a previously saved value from the local disk cache by string key.
+    Always try this BEFORE calling expensive web or yt-dlp tools to avoid redundant work.
+    Returns the cached data or a miss message.
+    """
+    return v2.cache_read(key)
+
+@tool
+def cache_write(key: str, data: str) -> str:
+    """
+    Save a value to the local disk cache under a string key.
+    Use after any expensive fetch (web search, channel scan, yt-dlp) to avoid re-fetching.
+    """
+    return v2.cache_write(key, data)
+
+@tool
+def topic_analyzer(raw_content: str, content_type: str = "youtube") -> str:
+    """
+    Analyze raw research content and extract creator intelligence.
+    Identifies: trending subtopics, hook angles, audience pain points, keyword frequency.
+    content_type: 'youtube', 'article', 'transcript', or 'search_results'
+    Returns a structured Markdown analysis block ready for script planning.
+    """
+    return v2.topic_analyzer(raw_content, content_type)
+
+@tool
+def script_writer(topic: str, style: str = "educational", target_length: str = "medium", extra_context: str = "") -> str:
+    """
+    Generate a complete YouTube video script template.
+    style: 'educational', 'entertaining', 'documentary', 'shorts'
+    target_length: 'short' (3-5 min), 'medium' (8-12 min), 'long' (15-20 min)
+    extra_context: paste in topic_analyzer output or research to ground the script.
+    Returns a structured Markdown script with fillable sections.
+    """
+    return v2.script_writer(topic, style, target_length, extra_context)
+
+@tool
+def model_router(task_description: str, priority: str = "balanced") -> str:
+    """
+    Recommend the best local Ollama model for a given task.
+    priority: 'speed' (fastest), 'quality' (best output), 'balanced' (default)
+    Returns a JSON object with the recommended model name and reasoning.
+    Always call this before any heavy LLM generation step.
+    """
+    return v2.model_router(task_description, priority)
+
+@tool
+def planner_tool(goal: str, available_tools: str = "") -> str:
+    """
+    Generate a step-by-step execution plan for a complex multi-step goal.
+    Breaks the goal into a sequence of small, composable tool calls with checkboxes.
+    available_tools: optionally pass comma-separated tool names to constrain the plan.
+    Returns a numbered Markdown plan with suggested tool calls at each step.
+    """
+    return v2.planner_tool(goal, available_tools or None)
 
 # Global map-reducer engine placeholder bridging tools safely
 core_engine = None
@@ -203,11 +331,22 @@ async def perform_deep_research(goal: str) -> str:
     compiled_knowledge = "\n\n" + "="*40 + "\n\n".join(summaries)
     return f"Deep Research Synthesis Complete.\n\n{compiled_knowledge}"
 
-# Aggregate Agent Tools
+# Aggregate Agent Tools — Full 14-tool MVP + legacy tools
 master_toolset = [
-    read_file, write_file, edit_file, list_files, create_directory,
-    rename_file, delete_file, search_in_files, run_bash, parse_json, 
-    standard_web_search, perform_deep_research
+    # Category 1 — Core System (NEW)
+    read_file, write_file, list_files, python_tool, bash_tool,
+    # Category 2 — Web & Research (NEW)
+    web_search, youtube_channel_scan, yt_dlp_tool,
+    # Category 3 — Memory & Cache (NEW)
+    cache_read, cache_write,
+    # Category 4 — Script Generation (NEW)
+    topic_analyzer, script_writer,
+    # Category 5 — Orchestration (NEW)
+    model_router, planner_tool,
+    # Legacy tools (kept for backwards compatibility)
+    edit_file, create_directory, rename_file, delete_file,
+    search_in_files, run_bash, parse_json,
+    standard_web_search, perform_deep_research,
 ]
 
 # ==========================================
@@ -219,14 +358,27 @@ class AgentSession:
         self.model = model
         self.core_engine = ChatOllama(model=model, base_url="http://localhost:11434", temperature=0, num_ctx=128000)
         self.agent_engine = self.core_engine.bind_tools(master_toolset)
+        # Wire core_engine for deep research map-reduce
+        global core_engine
+        core_engine = self.core_engine
         self.conversation = [
             SystemMessage(content=(
-                "You are an autonomous AI coding assistant and research agent.\n"
-                "You possess a dynamic tool registry that allows you to directly manipulate the file system (read_file, write_file, edit_file, run_bash), as well as perform web investigations.\n"
-                "If a user asks you to write code or correct bugs, execute the necessary tools to navigate files and explicitly fix them independently.\n"
-                "If a user asks for 'deep research' into a complex topic, you have a master tool `perform_deep_research`. Triggering it will silently perform complex scraping logic and pipe the summary text strictly into your context window. You can then save those findings via write_file or discuss them.\n"
-                "Ensure all final responses respect the Apple Style Guide standard: direct, clear, free of fluff, and aggressively capability-oriented.\n"
-                "If the user wants multiple files created, trigger multiple `write_file` sequences independently."
+                "You are an autonomous AI agent for content creators and researchers.\n\n"
+                "## TOOL PHILOSOPHY\n"
+                "Use small, composable tools chained together. Never try to do everything in one step.\n\n"
+                "## EXECUTION RULES\n"
+                "1. For any complex goal: call `planner_tool` FIRST to generate a step-by-step plan.\n"
+                "2. Before any expensive fetch: call `cache_read` to check if data already exists.\n"
+                "3. After any expensive fetch: call `cache_write` to save results for future use.\n"
+                "4. Before any heavy LLM task: call `model_router` to select the best model.\n"
+                "5. For YouTube/creator tasks: use `youtube_channel_scan` → `topic_analyzer` → `script_writer`.\n"
+                "6. For research tasks: use `web_search` → `topic_analyzer` → `write_file`.\n\n"
+                "## SAFETY RULES\n"
+                "- `bash_tool` is allowlisted only (yt-dlp, ffmpeg, curl, etc). Do not attempt system commands.\n"
+                "- `python_tool` is sandboxed. No imports or file I/O inside it.\n"
+                "- Dangerous tools (delete_file, run_bash) require explicit user approval.\n\n"
+                "## STYLE\n"
+                "Follow the Apple Style Guide: direct, clear, no fluff. Be capability-oriented."
             ))
         ]
 
