@@ -268,6 +268,13 @@ struct InlineImageView: View {
                                 .multilineTextAlignment(.center)
                                 .padding(.horizontal, 20)
                             
+                            Text(src)
+                                .font(.system(size: 8, design: .monospaced))
+                                .foregroundColor(.sentryYellow.opacity(0.6))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .padding(.horizontal, 10)
+                            
                             if let url = URL(string: src) {
                                 Link("Open in Browser", destination: url)
                                     .font(.system(size: 10, weight: .semibold))

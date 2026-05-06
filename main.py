@@ -410,16 +410,15 @@ class AgentSession:
                 "3. **SomeOrdinaryGamers** — gaming/commentary, 3.5M subs.\n\n"
                 "Always return REAL NAMES, subscriber counts, niche, and why they fit the request.\n\n"
 
-                "## IMAGE DISPLAY — YOU CAN AND MUST DISPLAY IMAGES\n"
-                "You ARE capable of displaying images. The frontend renders markdown images natively.\n"
-                "DO NOT ever say 'I cannot display images'. That is FALSE.\n\n"
-                "When the user asks to see an image/photo/picture:\n"
-                "1. Call `find_image` with a descriptive search query.\n"
-                "2. The tool returns a direct HTTPS image URL and a markdown line.\n"
-                "3. Copy the ![alt](url) line EXACTLY into your response text.\n"
-                "4. The frontend will load and display the image directly from the internet.\n"
-                "5. Results are cached — repeat queries are instant.\n\n"
-                "NEVER refuse. NEVER say you cannot display images. Just call `find_image`.\n\n"
+                "## IMAGE DISPLAY — PRIORITY #1\n"
+                "If the user asks for an image, photo, or picture:\n"
+                "1. Short-circuit all other logic. DO NOT call `planner_tool`, `web_search`, or `topic_analyzer`.\n"
+                "2. ONLY call `find_image` with a descriptive query.\n"
+                "3. Once you get the URL, immediately show the ![alt](url) markdown in your final response.\n"
+                "4. DO NOT provide 'analysis' or 'metadata' unless specifically asked. Just show the image.\n"
+                "5. If one image link fails, try ONE different query, then stop.\n\n"
+
+                "DO NOT refuse. DO NOT say 'I cannot display images'. Just call `find_image`. If one link fails, be resilient and find another.\n\n"
 
                 "## SAFETY RULES\n"
                 "- `bash_tool` executes from a strict allowlist only: yt-dlp, ffmpeg, ffprobe, curl, grep, ls, find, echo, wc, head, tail, du, date, which, python3, pip.\n"
@@ -467,7 +466,15 @@ class AgentSession:
                     self.conversation.append(HumanMessage(content="Task complete. Please provide a detailed final summary of your work and display any content you generated (scripts, findings, etc.) directly here."))
                     ai_msg = self.agent_engine.invoke(self.conversation)
                     self.conversation.append(ai_msg)
-                return ai_msg.content
+                
+                # --- AUTO-INJECT IMAGE LINK ---
+                # If we have a successful image link in history but it's not in the response, force it in.
+                final_content = ai_msg.content
+                found_links = [m.content for m in self.conversation if isinstance(m, ToolMessage) and "![" in str(m.content)]
+                if found_links and "![" not in final_content:
+                    final_content += "\n\n" + found_links[-1]
+                
+                return final_content
                 
             for tool_call in ai_msg.tool_calls:
                 t_name = tool_call.get("name")
@@ -535,6 +542,14 @@ class AgentSession:
                             tool_res = tool_target.invoke(t_args)
                             
                         self.conversation.append(ToolMessage(content=str(tool_res), tool_call_id=tool_call["id"], name=t_name))
+                        
+                        # --- AGGRESSIVE IMAGE SHORT-CIRCUIT ---
+                        # If we found an image, we FORCE the agent to stop everything and just show it.
+                        if t_name == "find_image" and "![" in str(tool_res):
+                            self.conversation.append(HumanMessage(content="IMAGE FOUND. STOP ALL RESEARCH. Do not call any more tools. Just show the image markdown in your final response now."))
+                            # We break out of the tool processing loop to force a final answer
+                            break 
+
                     except Exception as exc:
                         self.conversation.append(ToolMessage(content=f"Error: {exc}", tool_call_id=tool_call["id"], name=t_name))
                 else:

@@ -299,7 +299,8 @@ def find_image(query: str) -> str:
 
     try:
         with DDGS() as ddgs:
-            results = list(ddgs.images(query, max_results=5))
+            enhanced_query = f"{query} -site:unsplash.com -site:pinterest.com"
+            results = list(ddgs.images(enhanced_query, max_results=10))
         if not results:
             return f"No images found for '{query}'."
 
@@ -316,22 +317,27 @@ def find_image(query: str) -> str:
                     "source": r.get("source", ""),
                 })
 
-        if not valid_images:
-            return f"No valid HTTPS image URLs found for '{query}'."
+        # Filter out unsplash placeholders and generic garbage
+        reliable_images = [
+            img for img in valid_images 
+            if "unsplash.com" not in img["url"] and "placeholder" not in img["url"]
+        ]
+        
+        # If we filtered everything, fallback to valid_images
+        final_list = reliable_images if reliable_images else valid_images
+        
+        if not final_list:
+            return "No reliable images found."
 
-        # Pick the best image (largest resolution)
-        best = max(valid_images, key=lambda x: x.get("width", 0) * x.get("height", 0))
+        # Pick the best (largest) from the reliable list
+        best = max(final_list, key=lambda x: x.get("width", 0) * x.get("height", 0))
         best_url = best["url"]
-
-        # Build response with embed instruction
-        response = (
-            f"SUCCESS: Image found for '{query}'.\n"
-            f"Resolution: {best.get('width', '?')}x{best.get('height', '?')}\n"
-            f"Source: {best.get('source', 'unknown')}\n\n"
-            f"INCLUDE THIS EXACT LINE IN YOUR RESPONSE TO DISPLAY THE IMAGE:\n"
-            f"![{query}]({best_url})\n\n"
-            f"DO NOT call find_image again. The image is ready. Present it to the user now."
-        )
+        
+        # Provide the best link and a backup link in the tool response
+        response = f"![{query}]({best_url})"
+        if len(final_list) > 1:
+            backup_url = final_list[1]["url"]
+            response += f"\n\n(Backup link: {backup_url})"
 
         # Cache the result
         try:
