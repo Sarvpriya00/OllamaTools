@@ -64,6 +64,7 @@ private enum MDBlock {
     case codeBlock(String, String)
     case divider
     case listItem(String)
+    case image(String, String)   // alt, src (URL or absolute path)
     case blank
 }
 
@@ -103,6 +104,23 @@ private func parseMarkdown(_ raw: String) -> [MDBlock] {
                 blocks.append(.listItem(String(t[t.index(after: spaceIdx)...])))
             }
             i += 1; continue
+        }
+
+        // Image: ![alt](src)
+        if t.hasPrefix("![") && t.contains("](") {
+            if let closeBracketRange = t.range(of: "]("),
+               let closeParenIdx = t.lastIndex(of: ")") {
+                let altStart = t.index(t.startIndex, offsetBy: 2)
+                let altEnd   = closeBracketRange.lowerBound
+                let srcStart = closeBracketRange.upperBound
+                let srcEnd   = closeParenIdx
+                if altStart <= altEnd, srcStart <= srcEnd {
+                    let alt = String(t[altStart..<altEnd])
+                    let src = String(t[srcStart..<srcEnd])
+                    blocks.append(.image(alt, src))
+                    i += 1; continue
+                }
+            }
         }
 
         if t.isEmpty { blocks.append(.blank); i += 1; continue }
@@ -195,6 +213,9 @@ struct MarkdownView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+        case .image(let alt, let src):
+            InlineImageView(alt: alt, src: src)
+
         case .blank:
             Color.clear.frame(height: 4)
         }
@@ -206,6 +227,117 @@ struct MarkdownView: View {
         case 2: return .system(size: 16, weight: .bold, design: .rounded)
         default: return .system(size: 14, weight: .semibold)
         }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+// MARK: — Inline Image View
+// ─────────────────────────────────────────────────────────────
+
+struct InlineImageView: View {
+    let alt: String
+    let src: String
+
+    var isRemote: Bool { src.hasPrefix("http://") || src.hasPrefix("https://") }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if isRemote {
+                AsyncImage(url: URL(string: src)) { phase in
+                    switch phase {
+                    case .success(let img):
+                        img
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(maxWidth: 480)
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .strokeBorder(Color.sentryBorder, lineWidth: 1)
+                            )
+                    case .failure(let error):
+                        VStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 20))
+                                .foregroundColor(.orange.opacity(0.8))
+                            Text("Image Failed to Load")
+                                .font(.system(size: 12, weight: .bold))
+                            Text(error.localizedDescription)
+                                .font(.system(size: 10))
+                                .foregroundColor(.white.opacity(0.4))
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 20)
+                            
+                            if let url = URL(string: src) {
+                                Link("Open in Browser", destination: url)
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundColor(.sentryYellow)
+                                    .padding(.top, 4)
+                            }
+                        }
+                        .frame(maxWidth: 480, minHeight: 140)
+                        .background(Color.white.opacity(0.03))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10)
+                                .strokeBorder(Color.white.opacity(0.05), lineWidth: 1)
+                        )
+                    case .empty:
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(Color.white.opacity(0.04))
+                                .frame(maxWidth: 480, minHeight: 140)
+                            ProgressView()
+                                .tint(Color.sentryYellow)
+                        }
+                    @unknown default:
+                        EmptyView()
+                    }
+                }
+            } else {
+                if let nsImg = NSImage(contentsOfFile: src) {
+                    Image(nsImage: nsImg)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: 480)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .strokeBorder(Color.sentryBorder, lineWidth: 1)
+                        )
+                } else {
+                    imageErrorView(msg: "Local file not found: \(src)")
+                }
+            }
+            
+            if !alt.isEmpty {
+                Text(alt)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.white.opacity(0.4))
+                    .padding(.horizontal, 4)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func imageErrorView(msg: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "photo")
+                .foregroundColor(.white.opacity(0.3))
+            Text(msg)
+                .font(.system(size: 11))
+                .foregroundColor(.white.opacity(0.3))
+        }
+        .padding(12)
+        .background(Color.white.opacity(0.05))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+extension View {
+    @ViewBuilder
+    func `if`<Content: View>(_ condition: Bool, transform: (Self) -> Content) -> some View {
+        if condition { transform(self) } else { self }
     }
 }
 

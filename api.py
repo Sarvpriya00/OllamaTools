@@ -1,11 +1,18 @@
 import uvicorn
 from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict
+from pathlib import Path
 from main import AgentSession
 
 app = FastAPI(title="Sentry Agentic API")
+
+# Create downloads dir and mount as static files
+_DOWNLOADS_DIR = Path("/Users/sarvpriyaadarsh/ollama-agent/downloads")
+_DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/downloads", StaticFiles(directory=str(_DOWNLOADS_DIR)), name="downloads")
 
 # Global session store
 sessions: Dict[str, AgentSession] = {}

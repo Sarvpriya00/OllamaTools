@@ -102,7 +102,7 @@ def python_tool(code: str) -> str:
 # Allowlisted commands for bash_tool
 _BASH_ALLOWLIST = ["yt-dlp", "ffmpeg", "curl", "echo", "ls", "cat", "grep",
                    "wc", "head", "tail", "find", "du", "date", "pwd", "which",
-                   "python3", "pip", "ffprobe"]
+                   "python3", "pip", "ffprobe", "mkdir"]
 
 def bash_tool(command: str) -> str:
     """
@@ -267,6 +267,85 @@ def yt_dlp_tool(url: str, action: str = "metadata", output_dir: str = "./cache")
         return "Error: yt-dlp timed out after 300 seconds."
     except Exception as e:
         return f"yt_dlp_tool Error: {e}"
+
+
+def find_image(query: str) -> str:
+    """
+    Search for an image using DuckDuckGo Image Search and return direct image URLs.
+    Use this whenever the user asks to see an image, photo, or picture of anything.
+    query: what to search for (e.g. 'MKBHD portrait photo', 'sunset wallpaper 4K')
+    Returns: direct HTTPS image URLs ready for markdown embedding.
+    The frontend will load and display these images directly.
+    """
+    try:
+        from ddgs import DDGS
+    except ImportError:
+        try:
+            from duckduckgo_search import DDGS
+        except ImportError:
+            return "Error: Search library not installed. Run: pip install ddgs"
+
+    # Check cache first
+    cache_key = f"img:{query}"
+    cache_path = Path("./cache")
+    cache_path.mkdir(parents=True, exist_ok=True)
+    cache_file = cache_path / f"{hashlib.md5(cache_key.encode()).hexdigest()}.json"
+    if cache_file.exists():
+        try:
+            cached = json.loads(cache_file.read_text(encoding="utf-8"))
+            return cached.get("data", "Cache hit but no data.")
+        except Exception:
+            pass
+
+    try:
+        with DDGS() as ddgs:
+            results = list(ddgs.images(query, max_results=5))
+        if not results:
+            return f"No images found for '{query}'."
+
+        # Filter for valid HTTPS image URLs
+        valid_images = []
+        for r in results:
+            img_url = r.get("image", "")
+            if img_url.startswith("https://"):
+                valid_images.append({
+                    "url": img_url,
+                    "title": r.get("title", ""),
+                    "width": r.get("width", 0),
+                    "height": r.get("height", 0),
+                    "source": r.get("source", ""),
+                })
+
+        if not valid_images:
+            return f"No valid HTTPS image URLs found for '{query}'."
+
+        # Pick the best image (largest resolution)
+        best = max(valid_images, key=lambda x: x.get("width", 0) * x.get("height", 0))
+        best_url = best["url"]
+
+        # Build response with embed instruction
+        response = (
+            f"SUCCESS: Image found for '{query}'.\n"
+            f"Resolution: {best.get('width', '?')}x{best.get('height', '?')}\n"
+            f"Source: {best.get('source', 'unknown')}\n\n"
+            f"INCLUDE THIS EXACT LINE IN YOUR RESPONSE TO DISPLAY THE IMAGE:\n"
+            f"![{query}]({best_url})\n\n"
+            f"DO NOT call find_image again. The image is ready. Present it to the user now."
+        )
+
+        # Cache the result
+        try:
+            cache_file.write_text(json.dumps({
+                "key": cache_key,
+                "timestamp": datetime.utcnow().isoformat(),
+                "data": response
+            }, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+        return response
+    except Exception as e:
+        return f"Image Search Error: {e}"
 
 
 # ─────────────────────────────────────────────────────────────
@@ -579,6 +658,8 @@ TOOL_REGISTRY_V2 = {
     "web_search":            web_search,
     "youtube_channel_scan":  youtube_channel_scan,
     "yt_dlp_tool":           yt_dlp_tool,
+    "download_image":        find_image,  # alias for backward compat
+    "find_image":            find_image,
     # Category 3 — Memory & Cache
     "cache_read":            cache_read,
     "cache_write":           cache_write,

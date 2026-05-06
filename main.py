@@ -410,6 +410,17 @@ class AgentSession:
                 "3. **SomeOrdinaryGamers** — gaming/commentary, 3.5M subs.\n\n"
                 "Always return REAL NAMES, subscriber counts, niche, and why they fit the request.\n\n"
 
+                "## IMAGE DISPLAY — YOU CAN AND MUST DISPLAY IMAGES\n"
+                "You ARE capable of displaying images. The frontend renders markdown images natively.\n"
+                "DO NOT ever say 'I cannot display images'. That is FALSE.\n\n"
+                "When the user asks to see an image/photo/picture:\n"
+                "1. Call `find_image` with a descriptive search query.\n"
+                "2. The tool returns a direct HTTPS image URL and a markdown line.\n"
+                "3. Copy the ![alt](url) line EXACTLY into your response text.\n"
+                "4. The frontend will load and display the image directly from the internet.\n"
+                "5. Results are cached — repeat queries are instant.\n\n"
+                "NEVER refuse. NEVER say you cannot display images. Just call `find_image`.\n\n"
+
                 "## SAFETY RULES\n"
                 "- `bash_tool` executes from a strict allowlist only: yt-dlp, ffmpeg, ffprobe, curl, grep, ls, find, echo, wc, head, tail, du, date, which, python3, pip.\n"
                 "- `python_tool` is sandboxed: no imports, no file I/O, no system access — pure logic only.\n"
@@ -421,6 +432,7 @@ class AgentSession:
                 "- Never end with 'Would you like me to...' — just execute the logical next step.\n"
                 "- If you are running tools, briefly state which tool you are calling and why.\n"
                 "- If a task is done, summarize the output in a structured Markdown block.\n"
+                "- If you save a script or long text to a file using `write_file`, you MUST ALSO include the FULL content of that file (or a very detailed summary) in your response text so the user can see it immediately.\n"
                 "- If results were saved to a file, always confirm the file path at the end."
             ))
         ]
@@ -433,7 +445,14 @@ class AgentSession:
         batch_approve = False
         batch_reject = False
         
+        MAX_TOOL_ROUNDS = 15
+        tool_round = 0
+        call_history = []  # Track (name, args_hash) to detect loops
+        
         while True:
+            tool_round += 1
+            if tool_round > MAX_TOOL_ROUNDS:
+                return "⚠️ Reached maximum tool execution rounds. Here is what I have so far based on the tools executed above."
             try:
                 ai_msg = self.agent_engine.invoke(self.conversation)
             except Exception as e:
@@ -443,6 +462,11 @@ class AgentSession:
             self.conversation.append(ai_msg)
             
             if not getattr(ai_msg, "tool_calls", None):
+                if not ai_msg.content.strip():
+                    # Force a summary if the model was silent
+                    self.conversation.append(HumanMessage(content="Task complete. Please provide a detailed final summary of your work and display any content you generated (scripts, findings, etc.) directly here."))
+                    ai_msg = self.agent_engine.invoke(self.conversation)
+                    self.conversation.append(ai_msg)
                 return ai_msg.content
                 
             for tool_call in ai_msg.tool_calls:
@@ -483,6 +507,24 @@ class AgentSession:
                             continue
 
                 print(f"  {Colors.ACTION}[Executing] {t_name}({t_args}){Colors.RESET}")
+                
+                # Detect duplicate tool calls (same tool + same args)
+                import hashlib as _hl
+                args_sig = (t_name, _hl.md5(str(sorted(t_args.items())).encode()).hexdigest())
+                call_history.append(args_sig)
+                dup_count = call_history.count(args_sig)
+                if dup_count >= 3:
+                    print(f"  {Colors.FAIL}[LOOP DETECTED] Redirecting to final response.{Colors.RESET}")
+                    # Instead of continuing, we'll tell the agent to stop in the next round
+                    self.conversation.append(ToolMessage(
+                        content=f"STOP: You have called {t_name} with these arguments {dup_count} times. You MUST now provide a final answer to the user using the information you already have. DO NOT call any more tools.",
+                        tool_call_id=tool_call["id"], name=t_name
+                    ))
+                    # Force a final generation and break the while loop
+                    final_msg = self.agent_engine.invoke(self.conversation)
+                    self.conversation.append(final_msg)
+                    return final_msg.content
+                
                 tool_target = next((t for t in master_toolset if getattr(t, 'name', None) == t_name), None)
                 
                 if tool_target:
@@ -497,6 +539,15 @@ class AgentSession:
                         self.conversation.append(ToolMessage(content=f"Error: {exc}", tool_call_id=tool_call["id"], name=t_name))
                 else:
                     self.conversation.append(ToolMessage(content="Error: Unregistered tool.", tool_call_id=tool_call["id"], name=t_name))
+
+            # --- POST-TOOL CHECK ---
+            # If we just processed tool calls, we loop back to invoke the model again.
+            # However, some models might return empty content along with tool calls.
+            # We want to make sure the FINAL message is never empty.
+            # The next round of self.agent_engine.invoke(self.conversation) will happen at the top of the while loop.
+        
+        # This part should technically not be reachable because the loop returns from inside if tool_calls is empty.
+        return "Internal Error: Conversation flow broken."
 
 # CLI Confirmation Helper
 async def cli_confirm(risky_msg: str):
